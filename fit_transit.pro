@@ -13,7 +13,8 @@ pro fit_transit, $
                  do_read_lightcurve_from_local_fitsfile=do_read_lightcurve_from_local_fitsfile, $
                  working_dir=working_dir, $
                  common_data_root_dir=common_data_root_dir, $
-                 fit_transit_donefile_name=fit_transit_donefile_name
+                 fit_transit_donefile_name=fit_transit_donefile_name, $
+                 kid_fits_filenames=kid_fits_filenames
 ; 8/23/2012 This routine fits a transit light curve with a box-car
 ; transit shape of a specified depth (multiplied by a polynomial).  
 ; A delta-chi-square is computed relative to a fit with a single
@@ -41,8 +42,12 @@ ndur=n_elements(tdur)
 ;;2.1  Reading data from fits files
 ;;=============================================================================
 if keyword_set(do_read_lightcurve_from_local_fitsfile) then begin
-@read_data
+    @read_data
     time=time-55000d0
+    time=double(time)
+    fflat=double(fflat)
+    sig=double(sig)
+    db_err_flux=sig
 endif else begin
 ;;=============================================================================
 ;;2.2  Applying CBV's to SQL database light curves
@@ -299,6 +304,8 @@ chisq_array_poly=dblarr(ndepth,ndur,nt)
 chisq_array_polypulse=dblarr(ndepth,ndur,nt)
 chisq_array_polystep=dblarr(ndepth,ndur,nt)
 size_array=intarr(ndur,nt)
+;sigma will be passed to compute_qats to be used for expected signal strength calculation
+sigma_array_polypulse = dblarr(ndepth,ndur,nt)
 ;should I use the same order over the whole lc, or should we attempt
 ;to evaluate locally?
 ;ord=2
@@ -422,6 +429,11 @@ for iseg=0,nseg-1 do begin
                             chisq_array[idepth,idur,itime]=chi_stepfit-chi
                         endelse
                     endelse
+                    ;;Calculate sigma_array_polypulse to be passed to compute_qats
+                    diff_y=flux_model-yfit
+                    sorted_window=diff_y[sort(diff_y)]
+                    npts=n_elements(sorted_window)
+                    sigma_array_polypulse[idepth,idur,itime]=(sorted_window[0.8415*npts]-sorted_window[0.1585*npts])/2.
 ;print,idepth,idur,itime,chisq_array[idepth,idur,itime]
 ;+Debug plotting
                                 ;if(chi0-chi gt 20d0) then begin
@@ -469,6 +481,7 @@ depth, $
   ssap, $
   mask, $
   err_flux, $
+  sigma_array_polypulse, $
   filename=working_dir+'depth_distribution.sav'
 spawn,'touch '+working_dir+fit_transit_donefile_name
 ;save,/all,filename='depth_distribution'+kid+'.sav'
