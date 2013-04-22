@@ -14,7 +14,9 @@ pro fit_transit, $
                  working_dir=working_dir, $
                  common_data_root_dir=common_data_root_dir, $
                  fit_transit_donefile_name=fit_transit_donefile_name, $
-                 kid_fits_filenames=kid_fits_filenames
+                 kid_fits_filenames=kid_fits_filenames, $
+                 single_depth_dur=single_depth_dur, $
+                 mask_peak_transit_cadences=mask_peak_transit_cadences
 ; 8/23/2012 This routine fits a transit light curve with a box-car
 ; transit shape of a specified depth (multiplied by a polynomial).  
 ; A delta-chi-square is computed relative to a fit with a single
@@ -38,6 +40,7 @@ ndepth=n_elements(depth)
 ;;=============================================================================
 tdur=[1d0,1.25,1.5,1.75,2d0,2.5,3d0,3.5,4d0,4.5d0,5d0,5.5d0,6d0,6.5,7d0,7.5,8d0,8.5,9d0,9.5,10d0]/24d0
 ndur=n_elements(tdur)
+max_tdur = max(tdur)
 ;;=============================================================================
 ;;2.1  Reading data from fits files
 ;;=============================================================================
@@ -47,6 +50,7 @@ if keyword_set(do_read_lightcurve_from_local_fitsfile) then begin
     time=double(time)
     fflat=double(fflat)
     sig=double(sig)
+
     db_err_flux=sig
 endif else begin
 ;;=============================================================================
@@ -67,9 +71,12 @@ endif else begin
 ;oplot,db_time,db_flux/median(db_flux),color=255,psym=3
 ;;Assign database-extracted light curve into the business end
 ;;variables
+
+;TEST LIGHTCURVE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     time=db_time
     fflat=db_flux
     sig=db_err_flux
+    ;readcol,'fake1.txt',time,fflat,sig,format='d,d,d'
 endelse
 
 ;;=============================================================================
@@ -92,6 +99,14 @@ median_time_interval=median(time_interval)
 index_time_interval_gaps=where(abs(time_interval-median_time_interval) gt time_interval_matching_threshold,count_time_interval_gaps)
 uninterrupted_length_between_gaps=index_time_interval_gaps[1:n_elements(index_time_interval_gaps)-1]-index_time_interval_gaps[0:n_elements(index_time_interval_gaps)-2]
 ;;=============================================================================
+;;2.4.1.1 Clean tiny regions out of uninterrupted_length_between_gaps array
+;;=============================================================================
+index_sufficiently_large_regions = where(uninterrupted_length_between_gaps ge 3.*max(tdur)/median_time_interval,count_sufficiently_large_regions)
+if count_sufficiently_large_regions eq 0 then begin
+    print,'|ERROR|FIT_TRANSIT|No sufficiently large regions of uninterrupted data considering the current transit durations being tested.'
+    stop
+endif
+;;=============================================================================
 ;;2.4.1.2 Sort to get an assortment of the longest regions to test with
 ;;BIC polynomial order chooser.
 ;;=============================================================================
@@ -100,11 +115,13 @@ index_uninterrupted_length_between_gaps_sorted=reverse(sort(uninterrupted_length
 ;;2.4.2. Loop through a handful of the longest uninterrupted regions,
 ;;and pick the median polynomial order to progress
 ;;=============================================================================
-number_of_bic_test_regions=20L
+;number_of_bic_test_regions=min([20L,n_elements(index_uninterrupted_length_between_gaps_sorted)])
+number_of_bic_test_regions=min([20L,count_sufficiently_large_regions]) ;added by Ben
 bic_chosen_polynomial_orders=lonarr(number_of_bic_test_regions)
 for i=0L,number_of_bic_test_regions-1 do begin
 ;max_uninterrupted_length_between_gaps=max(uninterrupted_length_between_gaps,index_max_uninterrupted_length_between_gaps)
     max_uninterrupted_length_between_gaps=uninterrupted_length_between_gaps[index_uninterrupted_length_between_gaps_sorted[i]]
+    index_max_uninterrupted_length_between_gaps=index_uninterrupted_length_between_gaps_sorted[i]
     index_max_uninterrupted_length_between_gaps=index_uninterrupted_length_between_gaps_sorted[i]
     index_start_nogap_region=index_time_interval_gaps[index_max_uninterrupted_length_between_gaps]+1
     index_end_nogap_region=index_time_interval_gaps[index_max_uninterrupted_length_between_gaps+1]-1
@@ -153,7 +170,9 @@ for i=0L,number_of_bic_test_regions-1 do begin
     time_nogap_region_range=max(time_nogap_region) - min(time_nogap_region)
 ;print,'******',(time_nogap_region_range-max(tdur))/2.0
 ;print,'******',peak_period/2.0
-    window=min([ (time_nogap_region_range-max(tdur))/2.0 ,peak_period/2.0])
+;    window=min([ (time_nogap_region_range-max(tdur))/2.0 ,peak_period/2.0]) 
+;SOMETIMES peak_period is very small, removing for now
+    window=min([ (time_nogap_region_range-max(tdur))/2.0,max(tdur)])
     single_fit_time_baseline=max(tdur)+2.0*window
     index_start_nogap_region_trimmed=index_start_nogap_region
     dummy=min(abs(time-time[index_start_nogap_region]-single_fit_time_baseline),index_end_nogap_region_trimmed)
@@ -206,15 +225,21 @@ ssap=sig
 ;;3.4 Find temporal gaps in data taking:
 ;;=============================================================================
 nt=n_elements(time)
-gap=where((shift(reform(time),-1)-reform(time)) gt 0.5d0)
+gap=where((shift(reform(time),-1)-reform(time)) gt 0.5d0,countgaps)
 ;stop
 ;gap=[gap,1634,5158]
 ;gap=[gap,1635,5530,41460]
 ;gap=[gap,10]
-gap=gap[sort(gap)]
-gap1=[0,gap+1]
-gap2=[gap,nt-1]
-nseg=n_elements(gap1)
+if countgaps ge 1 then begin
+    gap=gap[sort(gap)]
+    gap1=[0,gap+1]
+    gap2=[gap,nt-1]
+    nseg=n_elements(gap1)
+endif else begin
+    nseg=1
+    gap1=[0]
+    gap2=[n_elements(time)-1]
+endelse
 
 
 ;;=============================================================================
@@ -258,17 +283,18 @@ endif
 mask=bytarr(n_elements(time))
 ;;5.2 Exclude known bad sections
 ;;5.2.1 Read in known bad points from data file:
-readcol,common_data_root_dir+'bad_regions.txt',bad_start,bad_end,format='f,f'
-nbad=n_elements(bad_start)
-for ibad=0,nbad-1 do begin
+;;THIS IS OUTDATED, NOW DO AN OUTLIER THRESHOLD
+;readcol,common_data_root_dir+'bad_regions.txt',bad_start,bad_end,format='f,f'
+;nbad=n_elements(bad_start)
+;for ibad=0,nbad-1 do begin
 ;    if keyword_set(do_make_planetmask) then begin
 ;        for ip=0,nplanet-1 do begin
 ;            mask_planet[ip,*]=mask_planet[ip,*] or (time gt bad_start[ibad] and time lt bad_end[ibad])
 ;        endfor
 ;    endif else begin
-    mask=mask or (time gt bad_start[ibad] and time lt bad_end[ibad])
+;    mask=mask or (time gt bad_start[ibad] and time lt bad_end[ibad])
 ;    endelse
-endfor
+;endfor
 ;;5.2.2 Invert 0's into 1's and vice versa:
 mask=mask eq 0
 ;;5.3 Mask out known planet transits, if desired
@@ -278,6 +304,16 @@ if keyword_set(do_make_planetmask) then begin
         mask=mask*reform(mask_planet[ip,*])
     endfor
 endif
+
+;Added by Ben and Chris
+;;5.3b Masking the peak signal cadences from previous QATS runs on this KID
+if keyword_set(mask_peak_transit_cadences) then begin
+    print,systime()+'|FIT_TRANSIT|MAKING PEAK SIGNAL MASK'
+    readcol,working_dir+'transit_cadences.txt',peak_signal_cadences,format='f'
+    mask[peak_signal_cadences]=0
+
+endif
+
 ;;5.4 Mask outliers beyond outlier_threshold of the median
 ;outlier_threshold=5d-4
 outlier_threshold=1.0
@@ -291,7 +327,6 @@ endif
 mask= mask and (abs(fsap-median(fsap,20)) lt outlier_threshold)
 
 ;char=get_kbrd(1)
-
 ;;=============================================================================
 ;;6.  Loop over light curve segments and do three kinds of fits to each
 ;;segment:  polynomial, polynomial+pulse (gridded), polynomial+step
@@ -299,6 +334,16 @@ mask= mask and (abs(fsap-median(fsap,20)) lt outlier_threshold)
 ;;=============================================================================
 ;;6.1  Set up variables:
 ;;=============================================================================
+depth_array = [0d0,3.2d-5,4d-5,5d-5,6.4d-5,8d-5,.000100,.000128,.000160,.000200,.000256,.000320,.000400,.000512,.000640,.000800,.001000,.01,.024]
+dur_array = [1d0,1.25,1.5,1.75,2d0,2.5,3d0,3.5,4d0,4.5d0,5d0,5.5d0,6d0,6.5,7d0,7.5,8d0,8.5,9d0,9.5,10d0]/24d0
+max_tdur = max(dur_array)
+if keyword_set(single_depth_dur) then begin
+    depth = depth_array[[0,single_depth_dur[0]]]
+    tdur = dur_array[single_depth_dur[1]]
+    ndepth = 2
+    ndur = 1
+endif
+    
 chisq_array=dblarr(ndepth,ndur,nt)
 chisq_array_poly=dblarr(ndepth,ndur,nt)
 chisq_array_polypulse=dblarr(ndepth,ndur,nt)
@@ -321,7 +366,7 @@ for iseg=0,nseg-1 do begin
 ;;=============================================================================
 ;;6.2.1  Commence the loop over window position within the segment
 ;;=============================================================================
-    for itime=i1,i2 do begin
+    for itime=LONG(i1),LONG(i2) do begin
 ;    for itime=i1,i2 do begin
 ;        print,iseg,itime
 ;;=============================================================================
@@ -333,18 +378,18 @@ for iseg=0,nseg-1 do begin
 ;;will have to offset the fit result later to match each more tailored
 ;;window (this means recalculating the chi-squared in the new window).
 ;;=============================================================================
-        indx_maxwindow=i1+where((time[i1:i2]-time[itime]-max(tdur)) lt window and $
+        indx_maxwindow=i1+where((time[i1:i2]-time[itime]-max_tdur) lt window and $
                                 (time[i1:i2]-time[itime]) gt -window and (mask[i1:i2] eq 1))
-        iout=i1+where(((((time[i1:i2]-time[itime]-max(tdur)) lt window) and ((time[i1:i2]-time[itime]-max(tdur) gt 0d0))) or $
+        iout=i1+where(((((time[i1:i2]-time[itime]-max_tdur) lt window) and ((time[i1:i2]-time[itime]-max_tdur gt 0d0))) or $
                        (((time[i1:i2]-time[itime]) gt -window) and ((time[i1:i2]-time[itime]) lt 0d0))) and (mask[i1:i2] eq 1))
-        iin=where((time[indx_maxwindow] ge time[itime]) and (time[indx_maxwindow] le (time[itime]+max(tdur))))
+        iin=where((time[indx_maxwindow] ge time[itime]) and (time[indx_maxwindow] le (time[itime]+max_tdur)))
         if(n_elements(iout) gt ord+2 and n_elements(iin) ge 1) then begin
             ttmp_maxwindow=time[indx_maxwindow]-time[itime]
             ntmp_maxwindow=double(n_elements(indx_maxwindow))
             ;;Do best fit for polynomial multiplier and depth/height of
             ;;step.
             status=calc_stepfit(data_x=double(ttmp_maxwindow),data_y=double(fsap[indx_maxwindow]),measure_errors=double(ssap[indx_maxwindow]),poly_order=ord,chisq=chi_stepfit_maxwindow,yfit=yfit_stepfit_maxwindow)
-        endif
+        endif else continue ;this should skip any analysis @ this itime
 ;;=============================================================================
 ;;6.2.1.2  Commence the loops over pulse durations and depths
 ;;=============================================================================
@@ -356,7 +401,9 @@ for iseg=0,nseg-1 do begin
                           (time[i1:i2]-time[itime]) gt -window and (mask[i1:i2] eq 1))
             iout=i1+where(((((time[i1:i2]-time[itime]-tdur[idur]) lt window) and ((time[i1:i2]-time[itime]-tdur[idur] gt 0d0))) or $
                            (((time[i1:i2]-time[itime]) gt -window) and ((time[i1:i2]-time[itime]) lt 0d0))) and (mask[i1:i2] eq 1))
-            iin=where((time[indx] ge time[itime]) and (time[indx] le (time[itime]+tdur[idur])))
+            if indx[0] ne -1 then begin
+                iin=where((time[indx] ge time[itime]) and (time[indx] le (time[itime]+tdur[idur])))
+            endif else iin = -1
             if(n_elements(iout) gt ord+2 and n_elements(iin) ge 1) then begin
                 ttmp=time[indx]-time[itime]
                 ntmp=double(n_elements(indx))
@@ -413,27 +460,36 @@ for iseg=0,nseg-1 do begin
                     chisq_array_poly[idepth,idur,itime]=chi0
                     chisq_array_polypulse[idepth,idur,itime]=chi
                     chisq_array_polystep[idepth,idur,itime]=chi_stepfit
+                    ;;ADDED BY BEN,1/29/13, CHANGING OUR chi0 TO BE chisq(polypulsefit compared to actual data) as opposed to chisq(polyfit)
+                    ;;This will return a stronger signal for an actual transit event (effectively masking the transit out of the polyfit).
+                    chi0_orig=chi0
+                    chi0 = total( ((yfit-flux)/ssap[indx])^2 )
                     ;;Save best chisq for passing up to compute_qats         
                     if(idepth eq 0) then begin
                         chisq_array[idepth,idur,itime]=chi
                     endif else begin
-                        value_best_chi=min([chi,chi_stepfit],index_best_chi)
+                        value_best_chi=min([chi,chi_stepfit,chi0_orig],index_best_chi)
                         if index_best_chi eq 0 then begin
 ;!!!Need to add dimensions to chisq_array so we can go back after the fact and
 ;plot the chi values of all three kinds of fits and analyze what
 ;happened to all three as a function of time.  EA, BLL, 24Sep2012.
                             chisq_array[idepth,idur,itime]=chi0-chi
                         endif else begin
-                            ;;Want case where step func. gives better fit (lower
-                            ;;chisq) to yield a negative value in chisq_array:
-                            chisq_array[idepth,idur,itime]=chi_stepfit-chi
+                            if index_best_chi eq 1 then begin
+                                ;;Want case where step func. gives better fit (lower
+                                ;;chisq) to yield a negative value in chisq_array:
+                                chisq_array[idepth,idur,itime]=chi_stepfit-chi
+                            endif else begin
+                                ;;Otherwise, the plain polynomial was best.
+                                chisq_array[idepth,idur,itime]=chi0_orig-chi
+                            endelse
                         endelse
                     endelse
                     ;;Calculate sigma_array_polypulse to be passed to compute_qats
                     diff_y=flux_model-yfit
                     sorted_window=diff_y[sort(diff_y)]
                     npts=n_elements(sorted_window)
-                    sigma_array_polypulse[idepth,idur,itime]=(sorted_window[0.8415*npts]-sorted_window[0.1585*npts])/2.
+                    sigma_array_polypulse[idepth,idur,itime]=(sorted_window[long(0.8415*npts)]-sorted_window[long(0.1585*npts)])/2.
 ;print,idepth,idur,itime,chisq_array[idepth,idur,itime]
 ;+Debug plotting
                                 ;if(chi0-chi gt 20d0) then begin
@@ -457,10 +513,10 @@ for iseg=0,nseg-1 do begin
                 endfor
             endif
         endfor
-        if(itime mod 100 eq 0) then print,'completed: ',itime*ndur*ndepth/double(nt*ndepth*ndur)*100d0,'% steps'
+        if(itime mod 1000 eq 0) then print,'completed: ',itime*ndur*ndepth/double(nt*ndepth*ndur)*100d0,'% steps'
     endfor
     for idur=0,ndur-1 do begin
-        inz=where(reform(double(size_array[idur,i1:i2])) ne 0d0)
+        inz= where(reform(double(size_array[idur,i1:i2])) ne 0d0)
         resid=sqrt(chisq_array[0,idur,i1+inz]/size_array[idur,i1+inz])
         for idepth=1,ndepth-1 do chisq_array[idepth,idur,i1:i2]= chisq_array[idepth,idur,i1:i2]/median(resid)^2
     endfor
@@ -482,6 +538,7 @@ depth, $
   mask, $
   err_flux, $
   sigma_array_polypulse, $
+  window, $
   filename=working_dir+'depth_distribution.sav'
 spawn,'touch '+working_dir+fit_transit_donefile_name
 ;save,/all,filename='depth_distribution'+kid+'.sav'
